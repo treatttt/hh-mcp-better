@@ -95,6 +95,15 @@ Application tools:
 
 - `hh_prepare_application` — returns a preview and one-time token; never writes
 - `hh_confirm_application` — submits only the exact stored preview
+- `hh_prepare_application_batch` — prepares an ordered target plus fallback
+  vacancies, skipping malformed, failed, or agent-flagged candidates
+- `hh_confirm_application_batch` — submits the exact confirmed batch up to its
+  hard target and returns `submitted`, `skipped`, `unknown`, and `not_attempted`
+
+Batch application limits are 20 target slots and 50 ordered candidates. Supply
+more candidates than the target so ordinary failures can be skipped. An
+ambiguous submission consumes a target slot because the POST may have succeeded;
+it is never retried automatically.
 
 Example interaction:
 
@@ -103,6 +112,12 @@ Example interaction:
 2. Review the returned vacancy, employer, resume, and complete letter.
 3. Explicitly say that the shown application may be submitted.
 4. The client calls `hh_confirm_application` with the preview token.
+
+For a batch, call `hh_prepare_application_batch` with one resume, the requested
+`target_count`, and an ordered candidate list. Each candidate may include its
+own exact `letter` or an agent-provided `skip_reason`. Review all prepared and
+fallback vacancies, then explicitly approve the preview before calling
+`hh_confirm_application_batch`.
 
 If HH accepts the request, the result is `submitted`. A definite rejection is
 `not_submitted`. A timeout or server-side ambiguity is `unknown`; the server
