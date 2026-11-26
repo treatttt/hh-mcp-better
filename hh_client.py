@@ -28,10 +28,37 @@ Required environment variables:
     - HH_REFRESH_TOKEN: Refresh token (optional, for token renewal)
 """
 
-import httpx
+from __future__ import annotations
+
+import asyncio
 import os
+import time
 from typing import Optional, Dict, Any, List
-from datetime import datetime, timedelta
+from datetime import datetime
+
+import httpx
+
+from token_store import (
+    OAuthTokens,
+    TokenStorageError,
+    TokenStore,
+    build_token_store,
+)
+
+from validation import (
+    EMPLOYMENT_VALUES,
+    EXPERIENCE_VALUES,
+    SCHEDULE_VALUES,
+    validate_area,
+    validate_boolean,
+    validate_choice,
+    validate_cover_letter,
+    validate_decimal_id,
+    validate_pagination,
+    validate_resume_id,
+    validate_salary,
+    validate_search_text,
+)
 
 
 class HHClient:
@@ -57,7 +84,7 @@ class HHClient:
 
     BASE_URL = "https://api.hh.ru"
 
-    def __init__(self):
+    def __init__(self, token_store: TokenStore | None = None):
         """Initialize the HeadHunter client with configuration from environment variables.
 
         Loads OAuth credentials, tokens, and other configuration from environment
@@ -77,9 +104,18 @@ class HHClient:
         self.client_secret = os.getenv("HH_CLIENT_SECRET")
         self.app_token = os.getenv("HH_APP_TOKEN")
         self.redirect_uri = os.getenv("HH_REDIRECT_URI")
-        self.access_token: Optional[str] = os.getenv("HH_ACCESS_TOKEN")
-        self.refresh_token: Optional[str] = os.getenv("HH_REFRESH_TOKEN")
+        self.token_store = token_store or build_token_store()
+        self.access_token: Optional[str] = None
+        self.refresh_token: Optional[str] = None
         self.token_expires_at: Optional[datetime] = None
+        self._refresh_lock = asyncio.Lock()
+
+        try:
+            stored_tokens = self.token_store.load()
+        except TokenStorageError:
+            stored_tokens = None
+        if stored_tokens is not None:
+            self._set_tokens_in_memory(stored_tokens)
 
     def _get_headers(self, authenticated: bool = False) -> Dict[str, str]:
         """Generate HTTP headers for HeadHunter API requests.
@@ -110,6 +146,52 @@ class HHClient:
             headers["Authorization"] = f"Bearer {self.app_token}"
 
         return headers
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        authenticated: bool = False,
+        retry_on_auth: bool = True,
+        **kwargs: Any,
+    ) -> httpx.Response:
+        if authenticated:
+            await self._ensure_access_token()
+
+        async def send() -> httpx.Response:
+            async with httpx.AsyncClient() as client:
+                return await client.request(
+                    method,
+                    url,
+                    headers=self._get_headers(authenticated=authenticated),
+                    **kwargs,
+                )
+
+        access_token_used = self.access_token
+        response = await send()
+        if authenticated and retry_on_auth and response.status_code == 401:
+            refreshed = await self.refresh_access_token(
+                force=True, expected_access_token=access_token_used
+            )
+            if refreshed:
+                response = await send()
+        return response
+
+    async def _ensure_access_token(self) -> None:
+        if not self.access_token:
+            raise TokenStorageError("Authentication required")
+        if self.token_expires_at is not None:
+            expires_at = self.token_expires_at.timestamp()
+            if expires_at <= time.time() + 30:
+                refreshed = await self.refresh_access_token()
+                if not refreshed:
+                    raise TokenStorageError("OAuth token refresh failed")
+
+    def _set_tokens_in_memory(self, tokens: OAuthTokens) -> None:
+        self.access_token = tokens.access_token
+        self.refresh_token = tokens.refresh_token
+        self.token_expires_at = datetime.fromtimestamp(tokens.expires_at)
 
     async def search_vacancies(
         self,
@@ -160,6 +242,17 @@ class HHClient:
         Raises:
             httpx.HTTPError: If the API request fails or returns an error status.
         """
+        text = validate_search_text(text)
+        area = validate_area(area)
+        experience = validate_choice(experience, "experience", EXPERIENCE_VALUES)
+        employment = validate_choice(employment, "employment", EMPLOYMENT_VALUES)
+        schedule = validate_choice(schedule, "schedule", SCHEDULE_VALUES)
+        salary = validate_salary(salary)
+        only_with_salary = validate_boolean(only_with_salary, "only_with_salary")
+        per_page, page = validate_pagination(
+            per_page, page, enforce_search_depth=True
+        )
+
         params = {
             "text": text,
             "area": area,
@@ -173,12 +266,11 @@ class HHClient:
         }
         params = {k: v for k, v in params.items() if v is not None}
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/vacancies", params=params, headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET", f"{self.BASE_URL}/vacancies", params=params
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_vacancy(self, vacancy_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific vacancy.
@@ -209,12 +301,13 @@ class HHClient:
         Raises:
             httpx.HTTPError: If the vacancy doesn't exist or API request fails.
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/vacancies/{vacancy_id}", headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
+        vacancy_id = validate_decimal_id(vacancy_id, "vacancy_id")
+
+        response = await self._request(
+            "GET", f"{self.BASE_URL}/vacancies/{vacancy_id}"
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_employer(self, employer_id: str) -> Dict[str, Any]:
         """Get detailed information about an employer/company.
@@ -243,12 +336,13 @@ class HHClient:
         Raises:
             httpx.HTTPError: If the employer doesn't exist or API request fails.
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/employers/{employer_id}", headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
+        employer_id = validate_decimal_id(employer_id, "employer_id")
+
+        response = await self._request(
+            "GET", f"{self.BASE_URL}/employers/{employer_id}"
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_similar_vacancies(self, vacancy_id: str) -> Dict[str, Any]:
         """Get similar vacancies for a specific vacancy.
@@ -274,13 +368,13 @@ class HHClient:
         Raises:
             httpx.HTTPError: If the vacancy doesn't exist or API request fails.
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/vacancies/{vacancy_id}/similar_vacancies",
-                headers=self._get_headers(),
-            )
-            response.raise_for_status()
-            return response.json()
+        vacancy_id = validate_decimal_id(vacancy_id, "vacancy_id")
+
+        response = await self._request(
+            "GET", f"{self.BASE_URL}/vacancies/{vacancy_id}/similar_vacancies"
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_areas(self) -> List[Dict[str, Any]]:
         """Get list of all available regions/areas for filtering.
@@ -305,12 +399,9 @@ class HHClient:
         Raises:
             httpx.HTTPError: If the API request fails.
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/areas", headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request("GET", f"{self.BASE_URL}/areas")
+        response.raise_for_status()
+        return response.json()
 
     async def get_dictionaries(self) -> Dict[str, Any]:
         """Get all filter dictionaries from HeadHunter.
@@ -338,12 +429,9 @@ class HHClient:
         Raises:
             httpx.HTTPError: If the API request fails.
         """
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/dictionaries", headers=self._get_headers()
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request("GET", f"{self.BASE_URL}/dictionaries")
+        response.raise_for_status()
+        return response.json()
 
     def set_tokens(self, access_token: str, refresh_token: str, expires_in: int):
         """Set OAuth tokens and calculate expiration time.
@@ -357,11 +445,20 @@ class HHClient:
             refresh_token (str): Refresh token for renewing expired access tokens.
             expires_in (int): Token lifetime in seconds from now.
         """
-        self.access_token = access_token
-        self.refresh_token = refresh_token
-        self.token_expires_at = datetime.now() + timedelta(seconds=expires_in)
+        tokens = OAuthTokens(
+            access_token=access_token,
+            refresh_token=refresh_token,
+            expires_at=time.time() + expires_in,
+        )
+        self.token_store.save(tokens)
+        self._set_tokens_in_memory(tokens)
 
-    async def refresh_access_token(self) -> bool:
+    async def refresh_access_token(
+        self,
+        *,
+        force: bool = False,
+        expected_access_token: str | None = None,
+    ) -> bool:
         """Refresh the access token using the refresh token.
 
         Attempts to refresh the OAuth access token using the stored refresh token.
@@ -378,26 +475,49 @@ class HHClient:
             Requires a valid refresh token to be set in the client.
             If refresh fails, the user will need to re-authenticate via OAuth.
         """
-        if not self.refresh_token:
-            return False
+        async with self._refresh_lock:
+            if (
+                force
+                and expected_access_token is not None
+                and self.access_token != expected_access_token
+            ):
+                return True
+            if not force and self.token_expires_at is not None:
+                if self.token_expires_at.timestamp() > time.time() + 30:
+                    return True
+            if not self.refresh_token:
+                return False
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                "https://hh.ru/oauth/token",
-                data={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token,
-                },
-                headers=self._get_headers(),
-            )
+            refresh_token = self.refresh_token
+            try:
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "https://api.hh.ru/token",
+                        data={
+                            "grant_type": "refresh_token",
+                            "refresh_token": refresh_token,
+                        },
+                        headers={
+                            "User-Agent": "JobHunter/1.0 (jhunterpro.ru)",
+                            "HH-User-Agent": "JobHunter/1.0 (jhunterpro.ru)",
+                        },
+                    )
+            except httpx.RequestError:
+                return False
 
-            if response.status_code == 200:
+            if response.status_code != 200:
+                return False
+
+            try:
                 data = response.json()
                 self.set_tokens(
-                    data["access_token"], data["refresh_token"], data["expires_in"]
+                    data["access_token"],
+                    data["refresh_token"],
+                    data["expires_in"],
                 )
-                return True
-        return False
+            except (KeyError, TypeError, ValueError, TokenStorageError):
+                return False
+            return True
 
     async def apply_to_vacancy(
         self, vacancy_id: str, resume_id: str, letter: Optional[str] = None
@@ -431,21 +551,88 @@ class HHClient:
             httpx.HTTPError: If the application fails (vacancy not found,
                 resume not accessible, already applied, etc.).
         """
-        if not self.access_token:
-            raise Exception("Authentication required. User must authorize via OAuth.")
+        vacancy_id = validate_decimal_id(vacancy_id, "vacancy_id")
+        resume_id = validate_resume_id(resume_id)
+        letter = validate_cover_letter(letter)
+
+        try:
+            vacancy_response = await self._request(
+                "GET",
+                f"{self.BASE_URL}/vacancies/{vacancy_id}",
+                authenticated=True,
+            )
+        except httpx.RequestError:
+            return {
+                "status": "unknown",
+                "reason": "duplicate_check_failed",
+            }
+
+        if not 200 <= vacancy_response.status_code < 300:
+            status = (
+                "not_submitted" if vacancy_response.status_code < 500 else "unknown"
+            )
+            return {
+                "status": status,
+                "reason": "duplicate_check_failed",
+                "http_status": vacancy_response.status_code,
+            }
+
+        try:
+            vacancy = vacancy_response.json()
+        except ValueError:
+            return {
+                "status": "unknown",
+                "reason": "invalid_duplicate_check_response",
+                "http_status": vacancy_response.status_code,
+            }
+
+        if "got_response" in vacancy.get("relations", []):
+            return {
+                "status": "not_submitted",
+                "reason": "already_applied",
+            }
 
         data = {"vacancy_id": vacancy_id, "resume_id": resume_id}
         if letter:
-            data["letter"] = letter
+            data["message"] = letter
 
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
+        try:
+            response = await self._request(
+                "POST",
                 f"{self.BASE_URL}/negotiations",
-                json=data,
-                headers=self._get_headers(authenticated=True),
+                authenticated=True,
+                data=data,
             )
-            response.raise_for_status()
-            return response.json()
+        except httpx.RequestError:
+            return {
+                "status": "unknown",
+                "reason": "transport_error",
+            }
+
+        if 200 <= response.status_code < 300:
+            result: Dict[str, Any] = {
+                "status": "submitted",
+                "http_status": response.status_code,
+            }
+            if response.content:
+                try:
+                    result["response"] = response.json()
+                except ValueError:
+                    pass
+            return result
+
+        if response.status_code < 500:
+            return {
+                "status": "not_submitted",
+                "reason": "hh_rejected_request",
+                "http_status": response.status_code,
+            }
+
+        return {
+            "status": "unknown",
+            "reason": "hh_server_error",
+            "http_status": response.status_code,
+        }
 
     async def get_negotiations(
         self, per_page: int = 20, page: int = 0
@@ -480,19 +667,18 @@ class HHClient:
             Exception: If no access token is available (authentication required).
             httpx.HTTPError: If the API request fails.
         """
-        if not self.access_token:
-            raise Exception("Authentication required.")
+        per_page, page = validate_pagination(per_page, page)
 
         params = {"per_page": per_page, "page": page}
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/negotiations",
-                params=params,
-                headers=self._get_headers(authenticated=True),
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET",
+            f"{self.BASE_URL}/negotiations",
+            authenticated=True,
+            params=params,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_resumes(self) -> Dict[str, Any]:
         """Get list of user's resumes.
@@ -518,16 +704,11 @@ class HHClient:
             Exception: If no access token is available (authentication required).
             httpx.HTTPError: If the API request fails.
         """
-        if not self.access_token:
-            raise Exception("Authentication required.")
-
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/resumes/mine",
-                headers=self._get_headers(authenticated=True),
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET", f"{self.BASE_URL}/resumes/mine", authenticated=True
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_resume(self, resume_id: str) -> Dict[str, Any]:
         """Get detailed information about a specific resume.
@@ -561,13 +742,10 @@ class HHClient:
             httpx.HTTPError: If the resume doesn't exist, is not accessible,
                 or API request fails.
         """
-        if not self.access_token:
-            raise Exception("Authentication required.")
+        resume_id = validate_resume_id(resume_id)
 
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                f"{self.BASE_URL}/resumes/{resume_id}",
-                headers=self._get_headers(authenticated=True),
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET", f"{self.BASE_URL}/resumes/{resume_id}", authenticated=True
+        )
+        response.raise_for_status()
+        return response.json()

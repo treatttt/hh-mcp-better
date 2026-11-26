@@ -1,5 +1,18 @@
 # HeadHunter MCP Server
 
+> Security-hardened derivative of
+> [gmen1057/headhunter-mcp-server](https://github.com/gmen1057/headhunter-mcp-server),
+> distributed under the original MIT License. This repository preserves the
+> upstream Git history and adds explicit application confirmation, stricter
+> input validation, safer OAuth token handling, privacy controls, and tests.
+
+> Доработанная с упором на безопасность версия проекта
+> [gmen1057/headhunter-mcp-server](https://github.com/gmen1057/headhunter-mcp-server),
+> распространяемая на условиях исходной лицензии MIT. Репозиторий сохраняет
+> историю оригинального проекта и добавляет подтверждение откликов, строгую
+> валидацию, защищённую работу с OAuth-токенами, контроль персональных данных и
+> тесты.
+
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 [![MCP](https://img.shields.io/badge/MCP-1.0+-green.svg)](https://modelcontextprotocol.io/)
 [![HeadHunter API](https://img.shields.io/badge/HeadHunter-API%20v3-orange.svg)](https://dev.hh.ru/)

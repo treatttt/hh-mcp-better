@@ -44,12 +44,31 @@ from mcp.types import (
 )
 import mcp.server.stdio
 
+from applications import ApplicationDisabledError, ApplicationService
 from hh_client import HHClient
+from output_safety import (
+    external_document,
+    external_field,
+    resume_full,
+    resume_summary,
+)
+from validation import (
+    DECIMAL_ID_SCHEMA_PATTERN,
+    MAX_AREA_ID,
+    MAX_COVER_LETTER_LENGTH,
+    MAX_PAGE,
+    MAX_PER_PAGE,
+    MAX_SALARY,
+    MAX_SEARCH_TEXT_LENGTH,
+    RESUME_ID_SCHEMA_PATTERN,
+    InvalidInputError,
+)
 
 load_dotenv()
 
 app = Server("hh-api")
 hh_client = HHClient()
+application_service = ApplicationService(hh_client)
 
 
 @app.list_tools()
@@ -78,13 +97,18 @@ async def list_tools() -> list[Tool]:
             description="Search for job vacancies on HeadHunter. Returns list of vacancies matching criteria.",
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "text": {
                         "type": "string",
+                        "minLength": 1,
+                        "maxLength": MAX_SEARCH_TEXT_LENGTH,
                         "description": "Search query (job title, keywords, skills)",
                     },
                     "area": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_AREA_ID,
                         "description": "Region ID (1=Moscow, 2=SPb, 113=Russia). Use hh_get_areas to find IDs.",
                     },
                     "experience": {
@@ -113,18 +137,27 @@ async def list_tools() -> list[Tool]:
                         ],
                         "description": "Work schedule",
                     },
-                    "salary": {"type": "integer", "description": "Minimum salary"},
+                    "salary": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_SALARY,
+                        "description": "Minimum salary",
+                    },
                     "only_with_salary": {
                         "type": "boolean",
                         "description": "Show only vacancies with specified salary",
                     },
                     "per_page": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PER_PAGE,
                         "description": "Results per page (max 100)",
                         "default": 20,
                     },
                     "page": {
                         "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_PAGE,
                         "description": "Page number (0-indexed)",
                         "default": 0,
                     },
@@ -136,9 +169,11 @@ async def list_tools() -> list[Tool]:
             description="Get detailed information about specific vacancy by ID",
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "vacancy_id": {
                         "type": "string",
+                        "pattern": DECIMAL_ID_SCHEMA_PATTERN,
                         "description": "Vacancy ID from search results",
                     }
                 },
@@ -150,9 +185,11 @@ async def list_tools() -> list[Tool]:
             description="Get information about employer/company by ID",
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "employer_id": {
                         "type": "string",
+                        "pattern": DECIMAL_ID_SCHEMA_PATTERN,
                         "description": "Employer ID from vacancy data",
                     }
                 },
@@ -164,8 +201,13 @@ async def list_tools() -> list[Tool]:
             description="Get similar vacancies for a specific vacancy",
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
-                    "vacancy_id": {"type": "string", "description": "Vacancy ID"}
+                    "vacancy_id": {
+                        "type": "string",
+                        "pattern": DECIMAL_ID_SCHEMA_PATTERN,
+                        "description": "Vacancy ID",
+                    }
                 },
                 "required": ["vacancy_id"],
             },
@@ -173,29 +215,44 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="hh_get_areas",
             description="Get list of all available regions/areas with IDs for filtering",
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
         ),
         Tool(
             name="hh_get_dictionaries",
             description="Get all dictionaries (experience, employment, schedule, etc.) for filtering",
-            inputSchema={"type": "object", "properties": {}},
-        ),
-        Tool(
-            name="hh_apply_to_vacancy",
-            description="Apply to vacancy (requires OAuth authentication). User must authorize first.",
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
+        ),
+        Tool(
+            name="hh_prepare_application",
+            description=(
+                "Prepare an application preview and one-time confirmation token. "
+                "This does not submit the application."
+            ),
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "vacancy_id": {
                         "type": "string",
+                        "pattern": DECIMAL_ID_SCHEMA_PATTERN,
                         "description": "Vacancy ID to apply to",
                     },
                     "resume_id": {
                         "type": "string",
+                        "pattern": RESUME_ID_SCHEMA_PATTERN,
                         "description": "Resume ID to use for application",
                     },
                     "letter": {
                         "type": "string",
+                        "maxLength": MAX_COVER_LETTER_LENGTH,
                         "description": "Cover letter text (optional)",
                     },
                 },
@@ -203,18 +260,43 @@ async def list_tools() -> list[Tool]:
             },
         ),
         Tool(
+            name="hh_confirm_application",
+            description=(
+                "Submit exactly the previously previewed application using its "
+                "one-time confirmation token."
+            ),
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "confirmation_token": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": "One-time token from hh_prepare_application",
+                    }
+                },
+                "required": ["confirmation_token"],
+            },
+        ),
+        Tool(
             name="hh_get_negotiations",
             description="Get user's application history and status (requires OAuth). Supports pagination.",
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
                     "per_page": {
                         "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_PER_PAGE,
                         "description": "Results per page (max 100)",
                         "default": 20,
                     },
                     "page": {
                         "type": "integer",
+                        "minimum": 0,
+                        "maximum": MAX_PAGE,
                         "description": "Page number (0-indexed)",
                         "default": 0,
                     },
@@ -224,15 +306,46 @@ async def list_tools() -> list[Tool]:
         Tool(
             name="hh_get_resumes",
             description="Get list of user's resumes (requires OAuth)",
-            inputSchema={"type": "object", "properties": {}},
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {},
+            },
         ),
         Tool(
             name="hh_get_resume",
-            description="Get detailed information about specific resume (requires OAuth)",
+            description=(
+                "Get a minimized resume view without names or contact information "
+                "(requires OAuth)"
+            ),
             inputSchema={
                 "type": "object",
+                "additionalProperties": False,
                 "properties": {
-                    "resume_id": {"type": "string", "description": "Resume ID"}
+                    "resume_id": {
+                        "type": "string",
+                        "pattern": RESUME_ID_SCHEMA_PATTERN,
+                        "description": "Resume ID",
+                    }
+                },
+                "required": ["resume_id"],
+            },
+        ),
+        Tool(
+            name="hh_get_resume_full",
+            description=(
+                "Explicitly get bounded personal and contact data for a resume. "
+                "Use only when the user asks for the full resume (requires OAuth)."
+            ),
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "resume_id": {
+                        "type": "string",
+                        "pattern": RESUME_ID_SCHEMA_PATTERN,
+                        "description": "Resume ID",
+                    }
                 },
                 "required": ["resume_id"],
             },
@@ -297,8 +410,8 @@ async def call_tool(
                         salary_info = f"up to {to_sal} {currency}"
 
                 formatted_items.append(
-                    f"[{item['id']}] {item['name']}\n"
-                    f"  Company: {item.get('employer', {}).get('name', 'N/A')}\n"
+                    f"[{item['id']}] {external_field(item['name'])}\n"
+                    f"  Company: {external_field(item.get('employer', {}).get('name', 'N/A'))}\n"
                     f"  Salary: {salary_info}\n"
                     f"  Area: {item.get('area', {}).get('name', 'N/A')}\n"
                     f"  URL: {item.get('alternate_url', 'N/A')}\n"
@@ -336,7 +449,7 @@ Employment: {result.get('employment', {}).get('name', 'N/A')}
 Schedule: {result.get('schedule', {}).get('name', 'N/A')}
 
 Description:
-{result.get('description', 'No description')}
+{external_document(result.get('description', 'No description'))}
 
 Key Skills:
 {', '.join([s.get('name', '') for s in result.get('key_skills', [])])}
@@ -348,9 +461,19 @@ URL: {result.get('alternate_url', 'N/A')}
 
         elif name == "hh_get_employer":
             result = await hh_client.get_employer(arguments["employer_id"])
+            safe_result = {
+                "id": result.get("id"),
+                "name": external_field(result.get("name")),
+                "description": external_document(result.get("description")),
+                "site_url": result.get("site_url"),
+                "alternate_url": result.get("alternate_url"),
+                "area": result.get("area"),
+                "industries": result.get("industries", [])[:50],
+            }
             return [
                 TextContent(
-                    type="text", text=json.dumps(result, indent=2, ensure_ascii=False)
+                    type="text",
+                    text=json.dumps(safe_result, indent=2, ensure_ascii=False),
                 )
             ]
 
@@ -361,7 +484,8 @@ URL: {result.get('alternate_url', 'N/A')}
             formatted_items = []
             for item in items:
                 formatted_items.append(
-                    f"[{item['id']}] {item['name']} - {item.get('employer', {}).get('name', 'N/A')}"
+                    f"[{item['id']}] {external_field(item['name'])} - "
+                    f"{external_field(item.get('employer', {}).get('name', 'N/A'))}"
                 )
 
             return [
@@ -389,12 +513,25 @@ URL: {result.get('alternate_url', 'N/A')}
                 )
             ]
 
-        elif name == "hh_apply_to_vacancy":
-            result = await hh_client.apply_to_vacancy(**arguments)
+        elif name == "hh_prepare_application":
+            result = await application_service.prepare(**arguments)
             return [
                 TextContent(
                     type="text",
-                    text=f"Application submitted successfully!\n{json.dumps(result, indent=2, ensure_ascii=False)}",
+                    text=(
+                        "Application preview created. Review every field, then use "
+                        "hh_confirm_application with the one-time token.\n"
+                        + json.dumps(result, indent=2, ensure_ascii=False)
+                    ),
+                )
+            ]
+
+        elif name == "hh_confirm_application":
+            result = await application_service.confirm(arguments["confirmation_token"])
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, ensure_ascii=False),
                 )
             ]
 
@@ -450,27 +587,29 @@ URL: {result.get('alternate_url', 'N/A')}
 
         elif name == "hh_get_resume":
             result = await hh_client.get_resume(arguments["resume_id"])
-
-            formatted = f"""
-Resume: {result.get('title', 'No title')}
-Status: {result.get('status', {}).get('name', 'N/A')}
-Updated: {result.get('updated_at', 'N/A')}
-Views: {result.get('views_count', 0)}
-
-Experience:
-"""
-            for exp in result.get("experience", []):
-                formatted += (
-                    f"- {exp.get('company', 'N/A')}: {exp.get('position', 'N/A')}\n"
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(resume_summary(result), indent=2, ensure_ascii=False),
                 )
+            ]
 
-            formatted += f"\nSkills: {result.get('skills', 'N/A')}"
-
-            return [TextContent(type="text", text=formatted)]
+        elif name == "hh_get_resume_full":
+            result = await hh_client.get_resume(arguments["resume_id"])
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(resume_full(result), indent=2, ensure_ascii=False),
+                )
+            ]
 
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
 
+    except InvalidInputError as e:
+        return [TextContent(type="text", text=f"Invalid input: {e}")]
+    except ApplicationDisabledError as e:
+        return [TextContent(type="text", text=f"Application disabled: {e}")]
     except Exception as e:
         return [TextContent(type="text", text=f"Error: {str(e)}")]
 

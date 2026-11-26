@@ -32,9 +32,16 @@ The script will:
 
 import os
 import asyncio
+import sys
+import time
+from pathlib import Path
 import httpx
 from dotenv import load_dotenv
 from urllib.parse import urlencode
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from token_store import OAuthTokens, build_token_store
 
 load_dotenv()
 
@@ -103,7 +110,7 @@ async def exchange_code(code: str):
     """
     async with httpx.AsyncClient() as client:
         response = await client.post(
-            "https://hh.ru/oauth/token",
+            "https://api.hh.ru/token",
             data={
                 "grant_type": "authorization_code",
                 "client_id": CLIENT_ID,
@@ -156,21 +163,13 @@ async def main():
     print("\nОбмен кода на токены...")
     tokens = await exchange_code(code)
 
-    print("\n✅ Успешно получены токены!")
-    print(f"Access Token: {tokens['access_token'][:50]}...")
-    print(f"Refresh Token: {tokens['refresh_token'][:50]}...")
-    print(f"Expires in: {tokens['expires_in']} seconds")
-
-    print("\n📝 Сохраните эти токены в .env файл:")
-    print(f"\nHH_ACCESS_TOKEN={tokens['access_token']}")
-    print(f"HH_REFRESH_TOKEN={tokens['refresh_token']}")
-
-    with open(".env", "a") as f:
-        f.write(f"\n\n# OAuth tokens (expires at {tokens['expires_in']} seconds)\n")
-        f.write(f"HH_ACCESS_TOKEN={tokens['access_token']}\n")
-        f.write(f"HH_REFRESH_TOKEN={tokens['refresh_token']}\n")
-
-    print("\n✅ Токены сохранены в .env файл")
+    token_pair = OAuthTokens(
+        access_token=tokens["access_token"],
+        refresh_token=tokens["refresh_token"],
+        expires_at=time.time() + tokens["expires_in"],
+    )
+    build_token_store().save(token_pair)
+    print("\n✅ OAuth tokens stored securely in the system credential store")
 
 
 if __name__ == "__main__":
