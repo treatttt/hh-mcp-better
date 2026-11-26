@@ -22,6 +22,7 @@ MAX_PER_PAGE = 100
 MAX_SEARCH_DEPTH = 2_000
 MAX_SEARCH_TEXT_LENGTH = 3_000
 MAX_COVER_LETTER_LENGTH = 10_000
+MAX_SKIP_REASON_LENGTH = 500
 MAX_AREA_ID = 2_147_483_647
 MAX_SALARY = 1_000_000_000
 
@@ -154,6 +155,18 @@ def validate_cover_letter(value: Any) -> str | None:
         "letter",
         minimum_length=0,
         maximum_length=MAX_COVER_LETTER_LENGTH,
+    )
+
+
+def validate_skip_reason(value: Any) -> str | None:
+    """Validate an agent-supplied reason for excluding a batch candidate."""
+    if value is None:
+        return None
+    return _validate_text(
+        value,
+        "skip_reason",
+        minimum_length=1,
+        maximum_length=MAX_SKIP_REASON_LENGTH,
     )
 
 

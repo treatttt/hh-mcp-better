@@ -26,6 +26,8 @@ Tools:
     hh_get_dictionaries: Retrieve all filter dictionaries from HeadHunter
     hh_prepare_application: Preview an application without submitting it
     hh_confirm_application: Submit an exact preview with one-time confirmation
+    hh_prepare_application_batch: Preview a bounded batch with fallbacks
+    hh_confirm_application_batch: Submit a confirmed batch and report skips
     hh_get_negotiations: Get user's application history (requires OAuth)
     hh_get_resumes: List user's resumes (requires OAuth)
     hh_get_resume: Get detailed resume information (requires OAuth)
@@ -46,7 +48,12 @@ from mcp.types import (
     ToolAnnotations,
 )
 
-from applications import ApplicationDisabledError, ApplicationService
+from applications import (
+    MAX_BATCH_APPLICATIONS,
+    MAX_BATCH_CANDIDATES,
+    ApplicationDisabledError,
+    ApplicationService,
+)
 from hh_client import HHClient
 from output_safety import (
     external_document,
@@ -62,6 +69,7 @@ from validation import (
     MAX_PER_PAGE,
     MAX_SALARY,
     MAX_SEARCH_TEXT_LENGTH,
+    MAX_SKIP_REASON_LENGTH,
     RESUME_ID_SCHEMA_PATTERN,
     InvalidInputError,
 )
@@ -291,6 +299,99 @@ async def list_tools() -> list[Tool]:
                         "minLength": 1,
                         "maxLength": 128,
                         "description": "One-time token from hh_prepare_application",
+                    }
+                },
+                "required": ["confirmation_token"],
+            },
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        Tool(
+            name="hh_prepare_application_batch",
+            description=(
+                "Prepare an ordered application batch with fallback vacancies. "
+                "Fetch errors, duplicate candidates, agent-flagged vacancies, "
+                "and obviously suspicious descriptions are skipped. This does "
+                "not submit applications."
+            ),
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "resume_id": {
+                        "type": "string",
+                        "pattern": RESUME_ID_SCHEMA_PATTERN,
+                        "description": "Resume ID used for every application",
+                    },
+                    "target_count": {
+                        "type": "integer",
+                        "minimum": 1,
+                        "maximum": MAX_BATCH_APPLICATIONS,
+                        "description": "Hard cap of application slots to use",
+                    },
+                    "candidates": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": MAX_BATCH_CANDIDATES,
+                        "description": (
+                            "Ordered candidates, including fallbacks. Set "
+                            "skip_reason when the agent considers a vacancy "
+                            "strange or unsuitable."
+                        ),
+                        "items": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "vacancy_id": {
+                                    "type": "string",
+                                    "pattern": DECIMAL_ID_SCHEMA_PATTERN,
+                                },
+                                "letter": {
+                                    "type": "string",
+                                    "maxLength": MAX_COVER_LETTER_LENGTH,
+                                },
+                                "skip_reason": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": MAX_SKIP_REASON_LENGTH,
+                                },
+                            },
+                            "required": ["vacancy_id"],
+                        },
+                    },
+                },
+                "required": ["resume_id", "target_count", "candidates"],
+            },
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
+        ),
+        Tool(
+            name="hh_confirm_application_batch",
+            description=(
+                "Submit a previously previewed application batch, in order, "
+                "up to its hard target. Per-vacancy errors are skipped and "
+                "returned in the final report. Unknown outcomes consume a "
+                "target slot so the batch cannot exceed its cap."
+            ),
+            inputSchema={
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "confirmation_token": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 128,
+                        "description": (
+                            "One-time token from hh_prepare_application_batch"
+                        ),
                     }
                 },
                 "required": ["confirmation_token"],
@@ -563,6 +664,31 @@ URL: {result.get("alternate_url", "N/A")}
 
         elif name == "hh_confirm_application":
             result = await application_service.confirm(arguments["confirmation_token"])
+            return [
+                TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2, ensure_ascii=False),
+                )
+            ]
+
+        elif name == "hh_prepare_application_batch":
+            result = await application_service.prepare_batch(**arguments)
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        "Batch preview created. Review every candidate and the "
+                        "skipped list. Confirm only if ready_for_confirmation is "
+                        "true and the exact batch is approved.\n"
+                        + json.dumps(result, indent=2, ensure_ascii=False)
+                    ),
+                )
+            ]
+
+        elif name == "hh_confirm_application_batch":
+            result = await application_service.confirm_batch(
+                arguments["confirmation_token"]
+            )
             return [
                 TextContent(
                     type="text",
