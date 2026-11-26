@@ -33,8 +33,8 @@ from __future__ import annotations
 import asyncio
 import os
 import time
-from typing import Optional, Dict, Any, List
 from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 import httpx
 
@@ -44,7 +44,6 @@ from token_store import (
     TokenStore,
     build_token_store,
 )
-
 from validation import (
     EMPLOYMENT_VALUES,
     EXPERIENCE_VALUES,
@@ -85,7 +84,7 @@ class HHClient:
     BASE_URL = "https://api.hh.ru"
 
     def __init__(self, token_store: TokenStore | None = None):
-        """Initialize the HeadHunter client with configuration from environment variables.
+        """Initialize the client with configuration from environment variables.
 
         Loads OAuth credentials, tokens, and other configuration from environment
         variables. The client can work in two modes:
@@ -104,6 +103,9 @@ class HHClient:
         self.client_secret = os.getenv("HH_CLIENT_SECRET")
         self.app_token = os.getenv("HH_APP_TOKEN")
         self.redirect_uri = os.getenv("HH_REDIRECT_URI")
+        self.user_agent = os.getenv(
+            "HH_USER_AGENT", "HeadHunterMCP/0.1 (local-personal-use)"
+        )
         self.token_store = token_store or build_token_store()
         self.access_token: Optional[str] = None
         self.refresh_token: Optional[str] = None
@@ -136,8 +138,8 @@ class HHClient:
                 - Authorization: Bearer token (access token or app token)
         """
         headers = {
-            "User-Agent": "JobHunter/1.0 (jhunterpro.ru)",
-            "HH-User-Agent": "JobHunter/1.0 (jhunterpro.ru)",
+            "User-Agent": self.user_agent,
+            "HH-User-Agent": self.user_agent,
         }
 
         if authenticated and self.access_token:
@@ -220,7 +222,8 @@ class HHClient:
                 Use get_areas() to find available region IDs.
                 Examples: 1=Moscow, 2=St.Petersburg, 113=Russia.
             experience (Optional[str]): Required experience level.
-                Valid values: "noExperience", "between1And3", "between3And6", "moreThan6".
+                Valid values: "noExperience", "between1And3", "between3And6",
+                "moreThan6".
             employment (Optional[str]): Employment type.
                 Valid values: "full", "part", "project", "volunteer", "probation".
             schedule (Optional[str]): Work schedule type.
@@ -249,9 +252,7 @@ class HHClient:
         schedule = validate_choice(schedule, "schedule", SCHEDULE_VALUES)
         salary = validate_salary(salary)
         only_with_salary = validate_boolean(only_with_salary, "only_with_salary")
-        per_page, page = validate_pagination(
-            per_page, page, enforce_search_depth=True
-        )
+        per_page, page = validate_pagination(per_page, page, enforce_search_depth=True)
 
         params = {
             "text": text,
@@ -303,9 +304,7 @@ class HHClient:
         """
         vacancy_id = validate_decimal_id(vacancy_id, "vacancy_id")
 
-        response = await self._request(
-            "GET", f"{self.BASE_URL}/vacancies/{vacancy_id}"
-        )
+        response = await self._request("GET", f"{self.BASE_URL}/vacancies/{vacancy_id}")
         response.raise_for_status()
         return response.json()
 
@@ -498,8 +497,8 @@ class HHClient:
                             "refresh_token": refresh_token,
                         },
                         headers={
-                            "User-Agent": "JobHunter/1.0 (jhunterpro.ru)",
-                            "HH-User-Agent": "JobHunter/1.0 (jhunterpro.ru)",
+                            "User-Agent": self.user_agent,
+                            "HH-User-Agent": self.user_agent,
                         },
                     )
             except httpx.RequestError:

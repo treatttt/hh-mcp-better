@@ -6,7 +6,6 @@ from html import unescape
 from html.parser import HTMLParser
 from typing import Any
 
-
 MAX_EXTERNAL_TEXT_LENGTH = 12_000
 MAX_EXTERNAL_FIELD_LENGTH = 500
 

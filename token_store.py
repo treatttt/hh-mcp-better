@@ -7,7 +7,6 @@ import os
 from dataclasses import asdict, dataclass
 from typing import Protocol
 
-
 KEYRING_SERVICE = "headhunter-mcp-server"
 KEYRING_ACCOUNT = "oauth-token-pair"
 
@@ -78,7 +77,9 @@ class EnvironmentTokenStore:
         try:
             return OAuthTokens(access_token, refresh_token, float(expires_at))
         except ValueError as error:
-            raise TokenStorageError("HH_TOKEN_EXPIRES_AT must be a timestamp") from error
+            raise TokenStorageError(
+                "HH_TOKEN_EXPIRES_AT must be a timestamp"
+            ) from error
 
     def save(self, tokens: OAuthTokens) -> None:
         os.environ["HH_ACCESS_TOKEN"] = tokens.access_token

@@ -28,12 +28,8 @@ MAX_SALARY = 1_000_000_000
 EXPERIENCE_VALUES = frozenset(
     {"noExperience", "between1And3", "between3And6", "moreThan6"}
 )
-EMPLOYMENT_VALUES = frozenset(
-    {"full", "part", "project", "volunteer", "probation"}
-)
-SCHEDULE_VALUES = frozenset(
-    {"fullDay", "shift", "flexible", "remote", "flyInFlyOut"}
-)
+EMPLOYMENT_VALUES = frozenset({"full", "part", "project", "volunteer", "probation"})
+SCHEDULE_VALUES = frozenset({"fullDay", "shift", "flexible", "remote", "flyInFlyOut"})
 
 _DECIMAL_ID_RE = re.compile(DECIMAL_ID_PATTERN, re.ASCII)
 _RESUME_ID_RE = re.compile(RESUME_ID_PATTERN, re.ASCII)
@@ -51,9 +47,7 @@ def _validate_int(
     maximum: int,
 ) -> int:
     if isinstance(value, bool) or not isinstance(value, int):
-        raise InvalidInputError(
-            f"{name} must be an integer, got {_type_name(value)}"
-        )
+        raise InvalidInputError(f"{name} must be an integer, got {_type_name(value)}")
     if not minimum <= value <= maximum:
         raise InvalidInputError(
             f"{name} must be between {minimum} and {maximum}, got {value}"
@@ -69,9 +63,7 @@ def _validate_text(
     maximum_length: int,
 ) -> str:
     if not isinstance(value, str):
-        raise InvalidInputError(
-            f"{name} must be a string, got {_type_name(value)}"
-        )
+        raise InvalidInputError(f"{name} must be a string, got {_type_name(value)}")
     if not minimum_length <= len(value) <= maximum_length:
         raise InvalidInputError(
             f"{name} length must be between {minimum_length} and "
@@ -92,9 +84,7 @@ def _validate_text(
 def validate_decimal_id(value: Any, name: str) -> str:
     """Validate a positive decimal identifier used in an API path."""
     if not isinstance(value, str):
-        raise InvalidInputError(
-            f"{name} must be a string, got {_type_name(value)}"
-        )
+        raise InvalidInputError(f"{name} must be a string, got {_type_name(value)}")
     if _DECIMAL_ID_RE.fullmatch(value) is None:
         raise InvalidInputError(
             f"{name} must contain only 1 to 20 ASCII digits and must not start "
@@ -106,13 +96,10 @@ def validate_decimal_id(value: Any, name: str) -> str:
 def validate_resume_id(value: Any) -> str:
     """Validate a HeadHunter resume hash used in an API path or request."""
     if not isinstance(value, str):
-        raise InvalidInputError(
-            f"resume_id must be a string, got {_type_name(value)}"
-        )
+        raise InvalidInputError(f"resume_id must be a string, got {_type_name(value)}")
     if _RESUME_ID_RE.fullmatch(value) is None:
         raise InvalidInputError(
-            "resume_id must contain 8 to 50 lowercase ASCII hexadecimal "
-            "characters"
+            "resume_id must contain 8 to 50 lowercase ASCII hexadecimal characters"
         )
     return value
 
@@ -185,7 +172,5 @@ def validate_choice(
 
 def validate_boolean(value: Any, name: str) -> bool:
     if not isinstance(value, bool):
-        raise InvalidInputError(
-            f"{name} must be a boolean, got {_type_name(value)}"
-        )
+        raise InvalidInputError(f"{name} must be a boolean, got {_type_name(value)}")
     return value

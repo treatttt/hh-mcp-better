@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-import os
 import asyncio
+import os
 import time
+from urllib.parse import urlencode
+
 import httpx
 from dotenv import load_dotenv
-from urllib.parse import urlencode
 
 from token_store import OAuthTokens, build_token_store
 
@@ -14,14 +15,16 @@ CLIENT_ID = os.getenv("HH_CLIENT_ID")
 CLIENT_SECRET = os.getenv("HH_CLIENT_SECRET")
 REDIRECT_URI = os.getenv("HH_REDIRECT_URI")
 
+
 def get_auth_url():
     params = {
         "response_type": "code",
         "client_id": CLIENT_ID,
         "redirect_uri": REDIRECT_URI,
-        "scope": "negotiations"
+        "scope": "negotiations",
     }
     return f"https://hh.ru/oauth/authorize?{urlencode(params)}"
+
 
 async def exchange_code(code: str):
     async with httpx.AsyncClient() as client:
@@ -32,11 +35,12 @@ async def exchange_code(code: str):
                 "client_id": CLIENT_ID,
                 "client_secret": CLIENT_SECRET,
                 "code": code,
-                "redirect_uri": REDIRECT_URI
-            }
+                "redirect_uri": REDIRECT_URI,
+            },
         )
         response.raise_for_status()
         return response.json()
+
 
 async def main():
     print("=" * 60)
@@ -59,6 +63,7 @@ async def main():
     )
     build_token_store().save(token_pair)
     print("\n✅ OAuth tokens stored securely in the system credential store")
+
 
 if __name__ == "__main__":
     asyncio.run(main())

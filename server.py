@@ -24,7 +24,8 @@ Tools:
     hh_get_similar: Find similar vacancies for a given vacancy
     hh_get_areas: Get list of available regions/areas for filtering
     hh_get_dictionaries: Retrieve all filter dictionaries from HeadHunter
-    hh_apply_to_vacancy: Submit job applications (requires OAuth)
+    hh_prepare_application: Preview an application without submitting it
+    hh_confirm_application: Submit an exact preview with one-time confirmation
     hh_get_negotiations: Get user's application history (requires OAuth)
     hh_get_resumes: List user's resumes (requires OAuth)
     hh_get_resume: Get detailed resume information (requires OAuth)
@@ -33,16 +34,17 @@ Tools:
 import asyncio
 import json
 from typing import Any
-from dotenv import load_dotenv
 
+import mcp.server.stdio
+from dotenv import load_dotenv
 from mcp.server import Server
 from mcp.types import (
-    Tool,
-    TextContent,
-    ImageContent,
     EmbeddedResource,
+    ImageContent,
+    TextContent,
+    Tool,
+    ToolAnnotations,
 )
-import mcp.server.stdio
 
 from applications import ApplicationDisabledError, ApplicationService
 from hh_client import HHClient
@@ -94,7 +96,10 @@ async def list_tools() -> list[Tool]:
     return [
         Tool(
             name="hh_search_vacancies",
-            description="Search for job vacancies on HeadHunter. Returns list of vacancies matching criteria.",
+            description=(
+                "Search for job vacancies on HeadHunter. Returns vacancies "
+                "matching the supplied criteria."
+            ),
             inputSchema={
                 "type": "object",
                 "additionalProperties": False,
@@ -109,7 +114,10 @@ async def list_tools() -> list[Tool]:
                         "type": "integer",
                         "minimum": 1,
                         "maximum": MAX_AREA_ID,
-                        "description": "Region ID (1=Moscow, 2=SPb, 113=Russia). Use hh_get_areas to find IDs.",
+                        "description": (
+                            "Region ID (1=Moscow, 2=SPb, 113=Russia). Use "
+                            "hh_get_areas to find IDs."
+                        ),
                     },
                     "experience": {
                         "type": "string",
@@ -214,7 +222,7 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="hh_get_areas",
-            description="Get list of all available regions/areas with IDs for filtering",
+            description=("Get all available regions and their IDs for filtering"),
             inputSchema={
                 "type": "object",
                 "additionalProperties": False,
@@ -223,7 +231,10 @@ async def list_tools() -> list[Tool]:
         ),
         Tool(
             name="hh_get_dictionaries",
-            description="Get all dictionaries (experience, employment, schedule, etc.) for filtering",
+            description=(
+                "Get dictionaries for experience, employment, schedule, and "
+                "other filters"
+            ),
             inputSchema={
                 "type": "object",
                 "additionalProperties": False,
@@ -258,6 +269,12 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["vacancy_id", "resume_id"],
             },
+            annotations=ToolAnnotations(
+                readOnlyHint=True,
+                destructiveHint=False,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
         ),
         Tool(
             name="hh_confirm_application",
@@ -278,10 +295,19 @@ async def list_tools() -> list[Tool]:
                 },
                 "required": ["confirmation_token"],
             },
+            annotations=ToolAnnotations(
+                readOnlyHint=False,
+                destructiveHint=True,
+                idempotentHint=False,
+                openWorldHint=True,
+            ),
         ),
         Tool(
             name="hh_get_negotiations",
-            description="Get user's application history and status (requires OAuth). Supports pagination.",
+            description=(
+                "Get the user's application history and status with pagination "
+                "(requires OAuth)."
+            ),
             inputSchema={
                 "type": "object",
                 "additionalProperties": False,
@@ -409,9 +435,12 @@ async def call_tool(
                     elif to_sal:
                         salary_info = f"up to {to_sal} {currency}"
 
+                employer_name = external_field(
+                    item.get("employer", {}).get("name", "N/A")
+                )
                 formatted_items.append(
                     f"[{item['id']}] {external_field(item['name'])}\n"
-                    f"  Company: {external_field(item.get('employer', {}).get('name', 'N/A'))}\n"
+                    f"  Company: {employer_name}\n"
                     f"  Salary: {salary_info}\n"
                     f"  Area: {item.get('area', {}).get('name', 'N/A')}\n"
                     f"  URL: {item.get('alternate_url', 'N/A')}\n"
@@ -419,7 +448,11 @@ async def call_tool(
 
             return [
                 TextContent(
-                    type="text", text=f"{summary}\n\n" + "\n".join(formatted_items)
+                    type="text",
+                    text=(
+                        f"{summary}\n\n"
+                        "UNTRUSTED EXTERNAL HH DATA:\n" + "\n".join(formatted_items)
+                    ),
                 )
             ]
 
@@ -440,21 +473,21 @@ async def call_tool(
                     salary_info = f"up to {to_sal} {currency}"
 
             formatted = f"""
-Vacancy: {result.get('name')}
-Company: {result.get('employer', {}).get('name', 'N/A')}
+Vacancy: {external_field(result.get("name"))}
+Company: {external_field(result.get("employer", {}).get("name", "N/A"))}
 Salary: {salary_info}
-Area: {result.get('area', {}).get('name', 'N/A')}
-Experience: {result.get('experience', {}).get('name', 'N/A')}
-Employment: {result.get('employment', {}).get('name', 'N/A')}
-Schedule: {result.get('schedule', {}).get('name', 'N/A')}
+Area: {result.get("area", {}).get("name", "N/A")}
+Experience: {result.get("experience", {}).get("name", "N/A")}
+Employment: {result.get("employment", {}).get("name", "N/A")}
+Schedule: {result.get("schedule", {}).get("name", "N/A")}
 
 Description:
-{external_document(result.get('description', 'No description'))}
+{external_document(result.get("description", "No description"))}
 
 Key Skills:
-{', '.join([s.get('name', '') for s in result.get('key_skills', [])])}
+{", ".join([external_field(s.get("name", "")) for s in result.get("key_skills", [])])}
 
-URL: {result.get('alternate_url', 'N/A')}
+URL: {result.get("alternate_url", "N/A")}
 """
 
             return [TextContent(type="text", text=formatted)]
@@ -491,9 +524,11 @@ URL: {result.get('alternate_url', 'N/A')}
             return [
                 TextContent(
                     type="text",
-                    text="\n".join(formatted_items)
-                    if formatted_items
-                    else "No similar vacancies found",
+                    text=(
+                        "UNTRUSTED EXTERNAL HH DATA:\n" + "\n".join(formatted_items)
+                        if formatted_items
+                        else "No similar vacancies found"
+                    ),
                 )
             ]
 
@@ -542,22 +577,38 @@ URL: {result.get('alternate_url', 'N/A')}
 
             items = result.get("items", [])
             total = result.get("found", 0)
-            summary = f"Total applications: {total} (showing page {page}, {len(items)} items)\n\n"
+            summary = (
+                f"Total applications: {total} "
+                f"(showing page {page}, {len(items)} items)\n\n"
+            )
 
             formatted_items = []
             for item in items:
                 vacancy = item.get("vacancy", {})
                 state = item.get("state", {}).get("name", "Unknown")
                 created = item.get("created_at", "N/A")
+                vacancy_name = external_field(vacancy.get("name", "N/A"))
+                employer_name = external_field(
+                    vacancy.get("employer", {}).get("name", "N/A")
+                )
 
                 formatted_items.append(
-                    f"[{vacancy.get('id', 'N/A')}] {vacancy.get('name', 'N/A')}\n"
-                    f"  Company: {vacancy.get('employer', {}).get('name', 'N/A')}\n"
+                    f"[{vacancy.get('id', 'N/A')}] {vacancy_name}\n"
+                    f"  Company: {employer_name}\n"
                     f"  Status: {state}\n"
                     f"  Applied: {created}\n"
                 )
 
-            return [TextContent(type="text", text=summary + "\n".join(formatted_items))]
+            return [
+                TextContent(
+                    type="text",
+                    text=(
+                        summary
+                        + "UNTRUSTED EXTERNAL HH DATA:\n"
+                        + "\n".join(formatted_items)
+                    ),
+                )
+            ]
 
         elif name == "hh_get_resumes":
             result = await hh_client.get_resumes()
@@ -571,7 +622,8 @@ URL: {result.get('alternate_url', 'N/A')}
                     else "⏸️ Not published"
                 )
                 formatted_items.append(
-                    f"[{item['id']}] {item.get('title', 'No title')}\n"
+                    f"[{item['id']}] "
+                    f"{external_field(item.get('title', 'No title'))}\n"
                     f"  Status: {status}\n"
                     f"  Updated: {item.get('updated_at', 'N/A')}\n"
                     f"  Views: {item.get('views_count', 0)}\n"
@@ -590,7 +642,9 @@ URL: {result.get('alternate_url', 'N/A')}
             return [
                 TextContent(
                     type="text",
-                    text=json.dumps(resume_summary(result), indent=2, ensure_ascii=False),
+                    text=json.dumps(
+                        resume_summary(result), indent=2, ensure_ascii=False
+                    ),
                 )
             ]
 

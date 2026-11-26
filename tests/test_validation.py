@@ -21,6 +21,14 @@ from validation import (
 )
 
 
+class EmptyTokenStore:
+    def load(self):
+        return None
+
+    def save(self, tokens):
+        self.tokens = tokens
+
+
 class IdentifierValidationTests(unittest.TestCase):
     def test_valid_identifiers_are_returned_unchanged(self):
         self.assertEqual(validate_decimal_id("126209046", "vacancy_id"), "126209046")
@@ -88,21 +96,21 @@ class ParameterValidationTests(unittest.TestCase):
 
 class RejectBeforeHttpTests(unittest.IsolatedAsyncioTestCase):
     async def test_invalid_path_identifier_does_not_create_http_client(self):
-        client = HHClient()
+        client = HHClient(token_store=EmptyTokenStore())
         with patch("hh_client.httpx.AsyncClient") as async_client:
             with self.assertRaises(InvalidInputError):
                 await client.get_vacancy("../negotiations")
         async_client.assert_not_called()
 
     async def test_invalid_search_parameters_do_not_create_http_client(self):
-        client = HHClient()
+        client = HHClient(token_store=EmptyTokenStore())
         with patch("hh_client.httpx.AsyncClient") as async_client:
             with self.assertRaises(InvalidInputError):
                 await client.search_vacancies(per_page=100, page=20)
         async_client.assert_not_called()
 
     async def test_invalid_resume_id_precedes_authentication_and_http(self):
-        client = HHClient()
+        client = HHClient(token_store=EmptyTokenStore())
         client.access_token = None
         with patch("hh_client.httpx.AsyncClient") as async_client:
             with self.assertRaises(InvalidInputError):
